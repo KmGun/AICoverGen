@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import subprocess
+import shutil
 from contextlib import suppress
 from urllib.parse import urlparse, parse_qs
 
@@ -243,7 +244,7 @@ def song_cover_pipeline(song_inputs, voice_model, pitch_change, keep_files,
 
     song_inputs = song_inputs.split(',')
     try:
-        if not song_input or not voice_model:
+        if not song_inputs or not voice_model:
             raise_exception('Ensure that the song input field and voice model field is filled.', is_webui)
 
         display_progress('[~] Starting AI Cover Generation Pipeline...', 0, is_webui, progress)
@@ -302,11 +303,15 @@ def song_cover_pipeline(song_inputs, voice_model, pitch_change, keep_files,
                 display_progress('[~] Converting voice using RVC...', 0.5, is_webui, progress)
                 voice_change(voice_model, main_vocals_dereverb_path, ai_vocals_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui)
 
-            # no_other, inst, ai 보컬
-            shutil.copy2(orig_song_path, song_dir) 
-            shutil.copy2(main_vocals_dereverb_path, song_dir) 
-            shutil.copy2(instrumentals_path, song_dir)
-            shutil.copy2(ai_vocals_path, song_dir)
+
+
+            # no_other, inst, ai 보컬 다른 폴더로 복사
+            newdir_path = os.path.join(root_output_dir,song_id)
+
+            # shutil.copy2(orig_song_path, root_output_dir) 
+            shutil.copy2(main_vocals_dereverb_path, newdir_path) 
+            shutil.copy2(instrumentals_path, newdir_path)
+            shutil.copy2(ai_vocals_path, newdir_path)
 
 
 
@@ -314,18 +319,11 @@ def song_cover_pipeline(song_inputs, voice_model, pitch_change, keep_files,
 
         #####################  개별 폴더를 ZIP 파일로 압축
         display_progress('[~] Zipping the result folders...', 0.95, is_webui, progress)
-        zip_filename = os.path.join(output_dir, 'song_covers.zip')
-        with ZipFile(zip_filename, 'w') as song_zip:
-            for folder in song_folders:
-                for file in os.listdir(folder):
-                    song_zip.write(os.path.join(folder, file), os.path.relpath(os.path.join(folder, file), root_output_dir))
+        abs_root_output_dir = os.path.abspath(root_output_dir)
+        zip_filepath = abs_root_output_dir + '.zip'
+        shutil.make_archive(abs_root_output_dir, 'zip', root_output_dir)
 
-        if not keep_files:
-            # ZIP 후 중간 파일/폴더 삭제
-            for folder in song_folders:
-                shutil.rmtree(folder)
-
-        return zip_filename  # 최종 ZIP 파일 경로 반환
+        return zip_filepath  # 최종 ZIP 파일 경로 반환
 
     except Exception as e:
         raise_exception(str(e), is_webui)
