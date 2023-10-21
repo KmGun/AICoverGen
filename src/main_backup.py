@@ -17,7 +17,6 @@ import yt_dlp
 from pedalboard import Pedalboard, Reverb, Compressor, HighpassFilter
 from pedalboard.io import AudioFile
 from pydub import AudioSegment
-from zipfile import ZipFile
 
 from mdx import run_mdx
 from rvc import Config, load_hubert, get_vc, rvc_infer
@@ -234,14 +233,11 @@ def combine_audio(audio_paths, output_path, main_gain, backup_gain, inst_gain, o
     main_vocal_audio.overlay(backup_vocal_audio).overlay(instrumental_audio).export(output_path, format=output_format)
 
 
-def song_cover_pipeline(song_inputs, voice_model, pitch_change, keep_files,
+def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
                         is_webui=0, main_gain=0, backup_gain=0, inst_gain=0, index_rate=0.5, filter_radius=3,
                         rms_mix_rate=0.25, f0_method='rmvpe', crepe_hop_length=128, protect=0.33, pitch_change_all=0,
                         reverb_rm_size=0.15, reverb_wet=0.2, reverb_dry=0.8, reverb_damping=0.7, output_format='mp3',
                         progress=gr.Progress()):
-    
-
-    song_inputs = song_inputs.split(',')
     try:
         if not song_input or not voice_model:
             raise_exception('Ensure that the song input field and voice model field is filled.', is_webui)
@@ -250,82 +246,71 @@ def song_cover_pipeline(song_inputs, voice_model, pitch_change, keep_files,
 
         with open(os.path.join(mdxnet_models_dir, 'model_data.json')) as infile:
             mdx_model_params = json.load(infile)
-        ######################### 새로추가
 
-        root_output_dir = os.path.join(output_dir, 'song_cover_results')
-        if not os.path.exists(root_output_dir):
-            os.makedirs(root_output_dir)
-        song_folders = []  # 각 노래의 폴더 경로를 저장하기 위한 리스트
+        # if youtube url
+        if urlparse(song_input).scheme == 'https':
+            input_type = 'yt'
+            song_id = get_youtube_video_id(song_input)
+            if song_id is None:
+                error_msg = 'Invalid YouTube url.'
+                raise_exception(error_msg, is_webui)
 
-        ######################### 개별곡 처리
-        for song_input in song_inputs:
-        ######################### 새로추가
-            ######### song_id 찾기
-            if urlparse(song_input).scheme == 'https':
-                input_type = 'yt'
-                song_id = get_youtube_video_id(song_input)
-                if song_id is None:
-                    error_msg = 'Invalid YouTube url.'
-                    raise_exception(error_msg, is_webui)
+        # local audio file
+        else:
+            input_type = 'local'
+            song_input = song_input.strip('\"')
+            if os.path.exists(song_input):
+                song_id = get_hash(song_input)
             else:
-                input_type = 'local'
-                song_input = song_input.strip('\"')
-                if os.path.exists(song_input):
-                    song_id = get_hash(song_input)
-                else:
-                    error_msg = f'{song_input} does not exist.'
-                    song_id = None
-                    raise_exception(error_msg, is_webui)
+                error_msg = f'{song_input} does not exist.'
+                song_id = None
+                raise_exception(error_msg, is_webui)
 
-            ######### 디렉토리 관련 설정 코드
-            song_dir = os.path.join(output_dir, song_id)
+        song_dir = os.path.join(output_dir, song_id)
 
-            if not os.path.exists(song_dir):
-                os.makedirs(song_dir)
+        if not os.path.exists(song_dir):
+            os.makedirs(song_dir)
+            orig_song_path, vocals_path, instrumentals_path, main_vocals_path, backup_vocals_path, main_vocals_dereverb_path = preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type, progress)
+
+        else:
+            vocals_path, main_vocals_path = None, None
+            paths = get_audio_paths(song_dir)
+
+            # if any of the audio files aren't available or keep intermediate files, rerun preprocess
+            if any(path is None for path in paths) or keep_files:
                 orig_song_path, vocals_path, instrumentals_path, main_vocals_path, backup_vocals_path, main_vocals_dereverb_path = preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type, progress)
             else:
-                vocals_path, main_vocals_path = None, None
-                paths = get_audio_paths(song_dir)
+                orig_song_path, instrumentals_path, main_vocals_dereverb_path, backup_vocals_path = paths
 
-                # if any of the audio files aren't available or keep intermediate files, rerun preprocess
-                if any(path is None for path in paths) or keep_files:
-                    orig_song_path, vocals_path, instrumentals_path, main_vocals_path, backup_vocals_path, main_vocals_dereverb_path = preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type, progress)
-                else:
-                    orig_song_path, instrumentals_path, main_vocals_dereverb_path, backup_vocals_path = paths
+        pitch_change = pitch_change * 12 + pitch_change_all
+        ai_vocals_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]}_{voice_model}_p{pitch_change}_i{index_rate}_fr{filter_radius}_rms{rms_mix_rate}_pro{protect}_{f0_method}{"" if f0_method != "mangio-crepe" else f"_{crepe_hop_length}"}.wav')
+        ai_cover_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]} ({voice_model} Ver).{output_format}')
 
-            ####### 출력 vocal 파일, cover 파일 path
-            ai_vocals_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]}_{voice_model}_p{pitch_change}_i{index_rate}_fr{filter_radius}_rms{rms_mix_rate}_pro{protect}_{f0_method}{"" if f0_method != "mangio-crepe" else f"_{crepe_hop_length}"}.wav')
-            ai_cover_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]} ({voice_model} Ver).{output_format}')
+        if not os.path.exists(ai_vocals_path):
+            display_progress('[~] Converting voice using RVC...', 0.5, is_webui, progress)
+            voice_change(voice_model, main_vocals_dereverb_path, ai_vocals_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui)
 
-            ####### 작업시작
-            if not os.path.exists(ai_vocals_path):
-                display_progress('[~] Converting voice using RVC...', 0.5, is_webui, progress)
-                voice_change(voice_model, main_vocals_dereverb_path, ai_vocals_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui)
+        display_progress('[~] Applying audio effects to Vocals...', 0.8, is_webui, progress)
+        ai_vocals_mixed_path = add_audio_effects(ai_vocals_path, reverb_rm_size, reverb_wet, reverb_dry, reverb_damping)
 
-            # no_other, inst, ai 보컬
-            shutil.copy2(orig_song_path, song_dir) 
-            shutil.copy2(main_vocals_dereverb_path, song_dir) 
-            shutil.copy2(instrumentals_path, song_dir)
-            shutil.copy2(ai_vocals_path, song_dir)
+        if pitch_change_all != 0:
+            display_progress('[~] Applying overall pitch change', 0.85, is_webui, progress)
+            instrumentals_path = pitch_shift(instrumentals_path, pitch_change_all)
+            backup_vocals_path = pitch_shift(backup_vocals_path, pitch_change_all)
 
-
-
-            # return ai_cover_path
-
-        #####################  개별 폴더를 ZIP 파일로 압축
-        display_progress('[~] Zipping the result folders...', 0.95, is_webui, progress)
-        zip_filename = os.path.join(output_dir, 'song_covers.zip')
-        with ZipFile(zip_filename, 'w') as song_zip:
-            for folder in song_folders:
-                for file in os.listdir(folder):
-                    song_zip.write(os.path.join(folder, file), os.path.relpath(os.path.join(folder, file), root_output_dir))
+        display_progress('[~] Combining AI Vocals and Instrumentals...', 0.9, is_webui, progress)
+        combine_audio([ai_vocals_mixed_path, backup_vocals_path, instrumentals_path], ai_cover_path, main_gain, backup_gain, inst_gain, output_format)
 
         if not keep_files:
-            # ZIP 후 중간 파일/폴더 삭제
-            for folder in song_folders:
-                shutil.rmtree(folder)
+            display_progress('[~] Removing intermediate audio files...', 0.95, is_webui, progress)
+            intermediate_files = [vocals_path, main_vocals_path, ai_vocals_mixed_path]
+            if pitch_change_all != 0:
+                intermediate_files += [instrumentals_path, backup_vocals_path]
+            for file in intermediate_files:
+                if file and os.path.exists(file):
+                    os.remove(file)
 
-        return zip_filename  # 최종 ZIP 파일 경로 반환
+        return ai_cover_path
 
     except Exception as e:
         raise_exception(str(e), is_webui)
