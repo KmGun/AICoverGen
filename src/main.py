@@ -309,6 +309,7 @@ def song_cover_pipeline(song_inputs, voice_model, pitch_change, keep_files,
             newdir_path = os.path.join(root_output_dir,song_id)
 
             # shutil.copy2(orig_song_path, root_output_dir) 
+            os.makedirs(newdir_path);
             shutil.copy2(main_vocals_dereverb_path, newdir_path) 
             shutil.copy2(instrumentals_path, newdir_path)
             shutil.copy2(ai_vocals_path, newdir_path)
