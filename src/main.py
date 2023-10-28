@@ -9,6 +9,7 @@ import shutil
 from contextlib import suppress
 from urllib.parse import urlparse, parse_qs
 
+import zipfile
 import gradio as gr
 import librosa
 import numpy as np
@@ -18,7 +19,7 @@ import yt_dlp
 from pedalboard import Pedalboard, Reverb, Compressor, HighpassFilter
 from pedalboard.io import AudioFile
 from pydub import AudioSegment
-from zipfile import ZipFile
+
 
 from mdx import run_mdx
 from rvc import Config, load_hubert, get_vc, rvc_infer
@@ -61,6 +62,13 @@ def get_youtube_video_id(url, ignore_playlist=True):
     # returns None for invalid YouTube url
     return None
 
+def get_file_paths(directory):
+    file_paths = []
+    for filename in os.listdir(directory):
+        full_path = os.path.join(directory, filename)
+        if os.path.isfile(full_path):
+            file_paths.append(full_path)
+    return file_paths
 
 def yt_download(link):
     ydl_opts = {
@@ -235,94 +243,58 @@ def combine_audio(audio_paths, output_path, main_gain, backup_gain, inst_gain, o
     main_vocal_audio.overlay(backup_vocal_audio).overlay(instrumental_audio).export(output_path, format=output_format)
 
 
-def song_cover_pipeline(song_inputs, voice_model, pitch_change, keep_files,
+def song_cover_pipeline(zip_path, voice_model, pitch_change, keep_files,
                         is_webui=0, main_gain=0, backup_gain=0, inst_gain=0, index_rate=0.5, filter_radius=3,
                         rms_mix_rate=0.25, f0_method='rmvpe', crepe_hop_length=128, protect=0.33, pitch_change_all=0,
                         reverb_rm_size=0.15, reverb_wet=0.2, reverb_dry=0.8, reverb_damping=0.7, output_format='mp3',
                         progress=gr.Progress()):
     
 
-    song_inputs = song_inputs.split(',')
+
+
+
     try:
-        if not song_inputs or not voice_model:
-            raise_exception('Ensure that the song input field and voice model field is filled.', is_webui)
+        if not zip_path or not voice_model:
+            raise_exception('모델이나 압축파일 둘중 하나를 선택 완료하세요', is_webui)
 
         display_progress('[~] Starting AI Cover Generation Pipeline...', 0, is_webui, progress)
 
         with open(os.path.join(mdxnet_models_dir, 'model_data.json')) as infile:
             mdx_model_params = json.load(infile)
-        ######################### 새로추가
-
-        root_output_dir = os.path.join(output_dir, 'song_cover_results')
+        ######################### 새로추가된 코드 ##########################
+        root_output_dir = os.path.join(output_dir, 'no_others')
         if not os.path.exists(root_output_dir):
             os.makedirs(root_output_dir)
-        song_folders = []  # 각 노래의 폴더 경로를 저장하기 위한 리스트
+
+        infer_output_dir = os.path.join(output_dir, 'infer')
+        if not os.path.exists(infer_output_dir):
+            os.makedirs(infer_output_dir)
+
+        # ZIP 파일 열기
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # 모든 파일 압축 해제
+            zip_ref.extractall(root_output_dir)
+
+        file_paths = get_file_paths(root_output_dir)
+
 
         ######################### 개별곡 처리
-        for song_input in song_inputs:
-        ######################### 새로추가
-            ######### song_id 찾기
-            if urlparse(song_input).scheme == 'https':
-                input_type = 'yt'
-                song_id = get_youtube_video_id(song_input)
-                if song_id is None:
-                    error_msg = 'Invalid YouTube url.'
-                    raise_exception(error_msg, is_webui)
-            else:
-                input_type = 'local'
-                song_input = song_input.strip('\"')
-                if os.path.exists(song_input):
-                    song_id = get_hash(song_input)
-                else:
-                    error_msg = f'{song_input} does not exist.'
-                    song_id = None
-                    raise_exception(error_msg, is_webui)
+        for file_path in file_paths:
+            file_name = os.path.basename(file_path)
 
-            ######### 디렉토리 관련 설정 코드
-            song_dir = os.path.join(output_dir, song_id)
+            ####### 추론 결과물 경로 생성
+            ai_vocals_path = os.path.join(infer_output_dir, f'{file_name}.wav')
 
-            if not os.path.exists(song_dir):
-                os.makedirs(song_dir)
-                orig_song_path, vocals_path, instrumentals_path, main_vocals_path, backup_vocals_path, main_vocals_dereverb_path = preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type, progress)
-            else:
-                vocals_path, main_vocals_path = None, None
-                paths = get_audio_paths(song_dir)
-
-                # if any of the audio files aren't available or keep intermediate files, rerun preprocess
-                if any(path is None for path in paths) or keep_files:
-                    orig_song_path, vocals_path, instrumentals_path, main_vocals_path, backup_vocals_path, main_vocals_dereverb_path = preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type, progress)
-                else:
-                    orig_song_path, instrumentals_path, main_vocals_dereverb_path, backup_vocals_path = paths
-
-            ####### 출력 vocal 파일, cover 파일 path
-            ai_vocals_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]}_{voice_model}_p{pitch_change}_i{index_rate}_fr{filter_radius}_rms{rms_mix_rate}_pro{protect}_{f0_method}{"" if f0_method != "mangio-crepe" else f"_{crepe_hop_length}"}.wav')
-            ai_cover_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]} ({voice_model} Ver).{output_format}')
-
-            ####### 작업시작
+            ####### 추론
             if not os.path.exists(ai_vocals_path):
                 display_progress('[~] Converting voice using RVC...', 0.5, is_webui, progress)
-                voice_change(voice_model, main_vocals_dereverb_path, ai_vocals_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui)
-
-
-
-            # no_other, inst, ai 보컬 다른 폴더로 복사
-            newdir_path = os.path.join(root_output_dir,song_id)
-
-            # shutil.copy2(orig_song_path, root_output_dir) 
-            os.makedirs(newdir_path);
-            shutil.copy2(main_vocals_dereverb_path, newdir_path) 
-            shutil.copy2(instrumentals_path, newdir_path)
-            shutil.copy2(ai_vocals_path, newdir_path)
-
-
-
-            # return ai_cover_path
+                voice_change(voice_model, file_path, ai_vocals_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui)
 
         #####################  개별 폴더를 ZIP 파일로 압축
-        display_progress('[~] Zipping the result folders...', 0.95, is_webui, progress)
-        abs_root_output_dir = os.path.abspath(root_output_dir)
+        display_progress('[~] Zipping the result folder...', 0.95, is_webui, progress)
+        abs_root_output_dir = os.path.abspath(infer_output_dir)
         zip_filepath = abs_root_output_dir + '.zip'
-        shutil.make_archive(abs_root_output_dir, 'zip', root_output_dir)
+        shutil.make_archive(abs_root_output_dir, 'zip', infer_output_dir)
 
         return zip_filepath  # 최종 ZIP 파일 경로 반환
 
