@@ -346,7 +346,7 @@ def find_full_path(song_title, isMan):
     if os.path.exists(search_path):
         for root, dirs, files in os.walk(search_path):
             for file in files:
-                if file.endswith("_vocal.mp3"):
+                if file.endswith(("_vocal.mp3", "_vocal.wav", "_vocal.flac")):
                     full_path = os.path.join(root, file)
                     song_guide_pathes.append(full_path)
     else:
