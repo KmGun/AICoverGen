@@ -1,5 +1,16 @@
 import os
 import sys
+import re
+
+
+# 파일 경로에서 1_,2_ 를 추출하는 함수
+def extract_number(file_path):
+    # 파일명 추출
+    file_name = os.path.basename(file_path)
+    # 파일명에서 숫자 추출
+    match = re.match(r"(\d+)_", file_name)
+    return int(match.group(1)) if match else float("inf")
+
 
 from main import voice_change, find_full_path
 
@@ -22,9 +33,11 @@ if __name__ == "__main__":
 
 for song_title in input_song_titles:
     input_paths = find_full_path(song_title, isMan)
+    # 파일 경로를 숫자에 따라 정렬
+    sorted_input_paths = sorted(input_paths, key=extract_number)
     if not os.path.exists(f"/content/drive/MyDrive/infer/{song_title}"):
         os.mkdir(f"/content/drive/MyDrive/infer/{song_title}")
-    for index, input_path in enumerate(input_paths):
+    for index, input_path in enumerate(sorted_input_paths):
         if pitch_control:
             pitch_value = pitch_values[index]
         else:
