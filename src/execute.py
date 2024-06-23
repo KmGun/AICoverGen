@@ -40,10 +40,12 @@ for song_title in input_song_titles:
     for index, input_path in enumerate(sorted_input_paths):
         if pitch_control:
             pitch_value = pitch_values[index]
+            print(pitch_value)
         else:
             pitch_value = 0
         file_name = os.path.basename(input_path)
         output_path = f"/content/drive/MyDrive/infer/{song_title}/{file_name}.mp3"
+        print("곡", input_path, "피치 변경값", pitch_value, type(pitch_value))
         voice_change(
             voice_model,
             input_path,
