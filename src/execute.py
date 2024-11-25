@@ -3,6 +3,7 @@ import sys
 import re
 import json
 import sox
+import shutil
 
 from main import voice_change, find_full_path
 
@@ -67,8 +68,9 @@ for song_data in song_datas:
     if is_empty_dir(
         f"/content/drive/MyDrive/infer/{voice_model}/[{pitch_value}]{song_title}"
     ):
-        os.mkdir(
+        os.makedirs(
             f"/content/drive/MyDrive/infer/{voice_model}/[{pitch_value}]{song_title}",
+            exist_ok=True,
         )
         for input_path in sorted_input_paths:
             file_name = os.path.basename(input_path)
@@ -86,10 +88,10 @@ for song_data in song_datas:
                 crepe_hop_length=128,
                 is_webui=0,
             )
-            # 원키가 아닐경우, mr 처리
-            if pitch_value != 0:
-                mr_input_path = os.path.dirname(input_path)
-                mr_output_path = f"/content/drive/MyDrive/infer/{voice_model}/[{pitch_value}]{song_title}/mr"
-                process_mr_files(mr_input_path, mr_output_path, pitch_value)
+
+            mr_input_path = os.path.dirname(input_path)
+            mr_output_path = f"/content/drive/MyDrive/infer/{voice_model}/[{pitch_value}]{song_title}/mr"
+            os.makedirs(mr_output_path, exist_ok=True)
+            process_mr_files(mr_input_path, mr_output_path, pitch_value)
     else:
         print("이미 추론이 되어있습니다.")
